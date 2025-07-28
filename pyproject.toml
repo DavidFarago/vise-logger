@@ -1,0 +1,20 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "vise-logger"
+version = "0.1.0"
+description = "MCP server for logging Vise Coding sessions."
+readme = "README.md"
+license = { file = "LICENSE" }
+requires-python = ">=3.10"
+authors = [
+    { name = "David Faragó", email = "drdavidfarago@gmail.com" },
+]
+dependencies = [
+    "mcp",
+]
+
+[project.scripts]
+vise-logger = "vise_logger.main:main"
