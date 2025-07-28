@@ -1,0 +1,3 @@
+Cline: ~/.config/Code/User/globalStorage/saoudrizwan.claude-dev/tasks/
+Kilo: ~/.config/Code/User/globalStorage/kilocode.kilo-code/tasks/
+Roo: ~/.config/Code/User/globalStorage/rooveterinaryinc.roo-cline/tasks/
