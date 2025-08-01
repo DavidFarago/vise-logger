@@ -36,14 +36,14 @@
       "verified": false
     },
     {
-      "dir": "/home/emergency/.config/Code/User/globalStorage/saoudrizwan.claude-dev/tasks",
-      "tool": "cline",
-      "verified": true
+      "dir": "~/.config/Code/User/workspaceStorage",
+      "tool": "copilot",
+      "verified": false
     },
     {
-      "dir": "/home/emergency",
-      "tool": "unknown",
-      "verified": true
+      "dir": "~/.config/Code/logs",
+      "tool": "copilot",
+      "verified": false
     }
   ]
 }

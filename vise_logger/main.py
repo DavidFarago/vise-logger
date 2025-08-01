@@ -15,15 +15,9 @@ logging.basicConfig(
 mcp = FastMCP("vise-logger")
 
 
-@mcp.tool()
-async def configure_log_dir(ctx: Context) -> str:
-    """
-    Finds and verifies the log directory for the coding tool.
-    This is a long-running operation and may take minutes to hours.
-    """
-    timestamp = datetime.now().strftime("%Y-%m-%d-%H-%M-%S")
-    marker = f"Starting at {timestamp} to search for the vise coding tool's log directory. This is a long-running operation and may take minutes to hours. The result will be stored in `locations.json`."
-    await ctx.report_progress(progress=0, total=1, message=marker)
+async def _configure_log_dir_background(marker: str, timestamp: str):
+    """Background task for configure_log_dir."""
+    logging.info("--- STARTING BACKGROUND LOG DIRECTORY CONFIGURATION ---")
 
     find_result = await asyncio.to_thread(find_log_file_with_marker, marker)
 
@@ -32,35 +26,32 @@ async def configure_log_dir(ctx: Context) -> str:
         result_message = f"Log directory found and verified: {log_file_path.parent}"
     else:
         result_message = "Could not find a verifiable log directory."
-
-    await ctx.report_progress(progress=1, total=1, message=result_message)
-    return result_message
+    logging.info(result_message)
 
 
 @mcp.tool()
-async def send_session(stars: float, comment: str, ctx: Context) -> str:
+async def configure_log_dir() -> str:
     """
-    Rates and archives the current Vise Coding session.
+    Finds and verifies the log directory for the coding tool.
+    This is a long-running operation and may take minutes to hours.
     """
     timestamp = datetime.now().strftime("%Y-%m-%d-%H-%M-%S")
-    marker = (
-        f"Rated session at {timestamp}: {stars} stars. Now uploading session to server."
-    )
+    marker = f"Starting at {timestamp} to search for the vise coding tool's log directory. This will be a long-running background task, result will be stored in `locations.json`."
 
-    logging.info("send_session called with stars=%s, comment='%s'", stars, comment)
-    await ctx.report_progress(
-        progress=0,
-        total=1,
-        message=f"Rated session at {timestamp}: {stars} stars. Storing session asynchronously on server.",
-    )
+    asyncio.create_task(_configure_log_dir_background(marker, timestamp))
+    return marker
+
+
+async def _send_session_background(marker: str, timestamp: str, stars: float, comment: str):
+    """Background task for send_session."""
+    logging.info("--- STARTING BACKGROUND SESSION UPLOAD ---")
 
     find_result = await asyncio.to_thread(find_log_file_with_marker, marker)
 
     if not find_result:
         error_message = "Could not find the log file with the session marker."
         logging.error(error_message)
-        await ctx.report_progress(progress=1, total=1, message=error_message)
-        return error_message
+        return
 
     log_file_path, coding_tool = find_result
 
@@ -70,8 +61,7 @@ async def send_session(stars: float, comment: str, ctx: Context) -> str:
     except IOError as e:
         error_message = f"Error reading log file: {e}"
         logging.error(error_message)
-        await ctx.report_progress(progress=1, total=1, message=error_message)
-        return error_message
+        return
 
     filtered_content = filter_content(log_content)
 
@@ -89,8 +79,19 @@ async def send_session(stars: float, comment: str, ctx: Context) -> str:
         f"Session {server_session_id} successfully uploaded to server."
     )
     logging.info(success_message)
-    await ctx.report_progress(progress=1, total=1, message=success_message)
-    return success_message
+
+
+@mcp.tool()
+async def send_session(stars: float, comment: str) -> str:
+    """
+    Rates and archives the current Vise Coding session.
+    """
+    timestamp = datetime.now().strftime("%Y-%m-%d-%H-%M-%S")
+    marker = (
+        f"Rated session at {timestamp}: {stars} stars. Uploading session in the background."
+    )
+    asyncio.create_task(_send_session_background(marker, timestamp, stars, comment))
+    return marker
 
 
 def main():

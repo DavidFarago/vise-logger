@@ -4,6 +4,8 @@ Vise Logger is an MCP server that captures, rates, and archives Vise Coding sess
 
 ## Installation and Setup
 
+### Local installation
+
 This project uses `uv` for package and environment management.
 
 1.  **Create a virtual environment:**
@@ -27,7 +29,26 @@ This project uses `uv` for package and environment management.
     uv pip install -e .
     ```
 
-## Running the Server
+In Cline and Roo:
+```json
+    "vise-logger": {
+      "disabled": false,
+      "timeout": 60,
+      "type": "stdio",
+      "command": "uv",
+      "args": [
+        "--directory",
+        "/home/emergency/git/vise-logger",
+        "run",
+        "vise-logger"
+      ]
+    }
+```
+
+### Installation of MCP Server via PyPI
+
+
+## Running the MCP Server
 
 To run the MCP server directly from the command line:
 
@@ -58,3 +79,26 @@ python3 -m unittest discover tests
 ```
 
 **Note on Best Practices:** Installing the package in editable mode (`-e`) is the recommended way to run tests for a distributable Python package. It correctly resolves imports without needing to modify `sys.path`, which is a less robust method. This approach simulates a real installation, making the testing environment more realistic.
+
+## REST Endpoints The Sessions Are Sent to
+
+The endpoint should have Content-Type: multipart/form-data and the following form fields:
+* file (required): The zip file containing the AI coding session data
+* metadata (required): JSON string with AI coding session metadata. The metadata JSON structure:
+```
+json{
+  "marker": "string (required)",
+  "tool": "string (required)",
+  "stars": "number (required)",
+  "comment": "string (optional)"
+}
+```
+
+The official web application for Vise Logger is www.viselo.gr.
+You can test it via
+```
+curl -X POST \
+  -F "file=@session.zip" \
+  -F 'metadata={"marker": "Rated session at 2025-07-30-20-56-11: 1.9 stars.", "tool": "curl", "stars": 1.9, "comment": "Just a curl test"}' \
+  "https://studio--viselog.us-central1.hosted.app/api/v1/sessions"
+```
