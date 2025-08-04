@@ -1,16 +1,29 @@
 import asyncio
+import json
 import logging
+import tempfile
+import zipfile
 from datetime import datetime
 
-from mcp.server.fastmcp import Context, FastMCP
+import requests
+from mcp.server.fastmcp import FastMCP
 
 from .privacy import filter_content
 from .search import find_log_file_with_marker
 
-# Configure logging
-logging.basicConfig(
-    level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s"
-)
+# Configure root logger
+root_logger = logging.getLogger()
+root_logger.setLevel(logging.INFO)
+
+# Remove existing handlers to avoid duplicates
+for handler in root_logger.handlers[:]:
+    root_logger.removeHandler(handler)
+
+# Add file handler
+file_handler = logging.FileHandler("/home/emergency/git/vise-logger/mcp_server.log")
+formatter = logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s")
+file_handler.setFormatter(formatter)
+root_logger.addHandler(file_handler)
 
 mcp = FastMCP("vise-logger")
 
@@ -42,7 +55,9 @@ async def configure_log_dir() -> str:
     return marker
 
 
-async def _send_session_background(marker: str, timestamp: str, stars: float, comment: str):
+async def _send_session_background(
+    marker: str, timestamp: str, stars: float, comment: str
+):
     """Background task for send_session."""
     logging.info("--- STARTING BACKGROUND SESSION UPLOAD ---")
 
@@ -64,21 +79,48 @@ async def _send_session_background(marker: str, timestamp: str, stars: float, co
         return
 
     filtered_content = filter_content(log_content)
-
     server_session_id = f"{timestamp}-{coding_tool}"
 
-    # Simulate Firebase upload
-    logging.info("--- SIMULATING FIREBASE UPLOAD ---")
-    logging.info("Server Session ID: %s", server_session_id)
-    logging.info("Stars: %s", stars)
-    logging.info("Comment: %s", comment)
-    logging.info("Log content length: %d", len(filtered_content))
-    logging.info("--- END OF SIMULATION ---")
+    try:
+        # Create a temporary file that is automatically deleted
+        with tempfile.NamedTemporaryFile(suffix=".zip", delete=True) as temp_zip:
+            # Create the zip archive using the temporary file's path
+            with zipfile.ZipFile(
+                temp_zip.name, "w", zipfile.ZIP_DEFLATED
+            ) as zip_archive:
+                zip_archive.writestr(log_file_path.name, filtered_content)
 
-    success_message = (
-        f"Session {server_session_id} successfully uploaded to server."
-    )
-    logging.info(success_message)
+            metadata = {
+                "marker": marker,
+                "tool": coding_tool,
+                "stars": stars,
+                "comment": comment,
+            }
+
+            # The tempfile is opened by default, but we need to re-open it for reading in binary mode
+            # after zipfile has written to it.
+            with open(temp_zip.name, "rb") as file_to_upload:
+                files = {
+                    "file": ("session.zip", file_to_upload, "application/zip"),
+                    "metadata": (None, json.dumps(metadata), "application/json"),
+                }
+
+                response = requests.post(
+                    "https://studio--viselog.us-central1.hosted.app/api/v1/sessions",
+                    files=files,
+                    timeout=30,
+                )
+                response.raise_for_status()
+
+            success_message = (
+                f"Session {server_session_id} successfully uploaded to server."
+            )
+            logging.info(success_message)
+            logging.info(f"Temporary file {temp_zip.name} removed.")
+
+    except (IOError, requests.exceptions.RequestException, zipfile.BadZipFile) as e:
+        error_message = f"Failed to create or upload session zip file: {e}"
+        logging.error(error_message)
 
 
 @mcp.tool()
@@ -87,9 +129,7 @@ async def send_session(stars: float, comment: str) -> str:
     Rates and archives the current Vise Coding session.
     """
     timestamp = datetime.now().strftime("%Y-%m-%d-%H-%M-%S")
-    marker = (
-        f"Rated session at {timestamp}: {stars} stars. Uploading session in the background."
-    )
+    marker = f"Rated session at {timestamp}: {stars} stars. Uploading session in the background."
     asyncio.create_task(_send_session_background(marker, timestamp, stars, comment))
     return marker
 
