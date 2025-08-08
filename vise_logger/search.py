@@ -5,9 +5,11 @@ import platform
 from pathlib import Path
 from typing import Optional, List, Dict, Any, Tuple
 
-MAX_FILE_SIZE = 10 * 1024 * 1024  # 10 MB
+MB = 1024 * 1024
+MAX_FILE_SIZE = 10 * MB
+MAX_DIR_SIZE = 50 * MB
+MAX_SUFFIXES = 4
 
-# Configure logging
 logging.basicConfig(
     level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s"
 )
@@ -15,7 +17,7 @@ logging.basicConfig(
 LOCATIONS_FILE = Path(__file__).parent / "locations.json"
 
 
-def read_locations() -> List[Dict[str, Any]]:
+def _read_locations() -> List[Dict[str, Any]]:
     """Reads log locations from the JSON file."""
     if not LOCATIONS_FILE.exists():
         return []
@@ -24,47 +26,61 @@ def read_locations() -> List[Dict[str, Any]]:
         return data.get("locations", [])
 
 
-def detect_log_directory(found_path: Path) -> Path:
+def _detect_log_directory(found_path: Path) -> Path:
     """
-    Detects the log directory based on some criterion (the number of files with the same suffix)
+    Detects the log path (found_path or it's directory) based on some criteria:
+    1. if the directory contains only one file, return that file
+    2. the size of the directory
+    3. the number of files with the same suffix in the directory
     """
     directory = found_path.parent
+
+    # sole file criterion
+    if len(list(directory.iterdir())) == 1:
+        assert(found_path.is_file()), "Expected found_path to be a file"
+        logging.debug("Picking log file as it is the only file in the directory.")
+        return found_path
+
+    # directory size criterion
+    try:
+        size = sum(f.stat().st_size for f in directory.glob("**/*") if f.is_file())
+        if size > MAX_DIR_SIZE:
+            logging.debug(
+                "Picking log file and not log dir as dir size exceeds limit: %s", size
+            )
+            return found_path
+    except (IOError, OSError, FileNotFoundError):
+        pass
+
+    # suffix amount criterion
     suffix = found_path.suffix
     if suffix:
         try:
             files_with_same_suffix = [
                 f for f in directory.iterdir() if f.suffix == suffix
             ]
-            if len(files_with_same_suffix) > 3:
+            if len(files_with_same_suffix) > MAX_SUFFIXES:
+                logging.debug(
+                    "Picking log file and not log dir as too many files with the same suffix: %s",
+                    len(files_with_same_suffix),
+                )
                 return found_path
         except (IOError, OSError, FileNotFoundError):
-            pass  # Ignore errors if we can't list the directory
+            pass
     return directory
 
 
-def update_or_add_location(found_path: Path, tool: str = "unknown") -> Path:
-    """Adds a new location with verified:true or updates an existing one."""
-    original_dir = found_path.parent
-    log_dir = detect_log_directory(found_path)
-
-    locations = read_locations()
-    found = False
-    for loc in locations:
-        if loc.get("dir") in [str(log_dir), str(original_dir)]:
-            loc["verified"] = True
-            log_dir = Path(loc.get("dir"))
-            found = True
-            break
-    if not found:
-        locations.append({"dir": str(log_dir), "tool": tool, "verified": True})
-
+def _add_location(found_path: Path, tool: str = "unknown") -> None:
+    """Adds a new location with verified:true"""
+    dir_of_all_logs = found_path.parent
+    locations = _read_locations()
+    locations.append({"dir": str(dir_of_all_logs), "tool": tool, "verified": True})
     with open(LOCATIONS_FILE, "w") as f:
         json.dump({"locations": locations}, f, indent=2)
-    logging.info("Updated/Added and verified log location: %s", log_dir)
-    return log_dir
+    logging.info("Updated/Added and verified log location: %s", dir_of_all_logs)
 
 
-def expand_path(path_str: str) -> Path:
+def _expand_path(path_str: str) -> Path:
     """Expands environment variables and home directory tilde in a path string."""
     path_str = os.path.expanduser(path_str)
 
@@ -85,8 +101,9 @@ def expand_path(path_str: str) -> Path:
     return Path(os.path.expandvars(path_str))
 
 
-def search_directory(directory: Path, marker: str) -> Optional[Path]:
-    """Recursively searches a directory for a file containing the marker."""
+def _search_path(directory: Path, marker: str) -> Optional[Tuple[Path, Path]]:
+    """Recursively searches a directory for a file containing the marker.
+       Returns the file path and what path to zip (the file or its directory) if found, otherwise None."""
     for root, _, files in os.walk(directory):
         for file in files:
             file_path = Path(root) / file
@@ -97,50 +114,52 @@ def search_directory(directory: Path, marker: str) -> Optional[Path]:
                     for line in f:
                         if marker in line:
                             logging.info("Marker found in: %s", file_path)
-                            return file_path
+                            return file_path, _detect_log_directory(file_path)
             except (IOError, OSError, FileNotFoundError):
                 continue
     return None
 
 
-def find_log_file_with_marker(marker: str) -> Optional[Tuple[Path, str]]:
+def find_log_path_with_marker(marker: str) -> Optional[Tuple[Path, Path, str]]:
     """
-    Finds the log file containing the unique marker by searching in a prioritized order.
+    Finds the log file containing the unique marker by searching in a prioritized order,
+    or the directory where the log file is located in case that whole directory represents the log/session.
+
+    returns:
+        A tuple of the found log file path, the path to zip, and the tool name; or None if not found
     """
     logging.info("Searching for log file with marker: %s", marker)
 
-    locations = read_locations()
+    locations = _read_locations()
     verified_locations = [loc for loc in locations if loc.get("verified")]
     unverified_locations = [loc for loc in locations if not loc.get("verified")]
 
     # Stage 1: Search in verified predefined locations
     logging.info("Stage 1: Searching in verified predefined locations.")
     for loc in verified_locations:
-        expanded_path = expand_path(loc.get("dir", ""))
+        expanded_path = _expand_path(loc.get("dir", ""))
         if expanded_path.exists() and expanded_path.is_dir():
-            found_path = search_directory(expanded_path, marker)
+            found_path = _search_path(expanded_path, marker)
             if found_path:
-                return found_path, loc.get("tool", "unknown")
+                return *found_path, loc.get("tool", "unknown")
 
     # Stage 2: Search in unverified predefined locations
     logging.info("Stage 2: Searching in unverified predefined locations.")
     for loc in unverified_locations:
-        expanded_path = expand_path(loc.get("dir", ""))
+        expanded_path = _expand_path(loc.get("dir", ""))
         if expanded_path.exists() and expanded_path.is_dir():
-            found_path = search_directory(expanded_path, marker)
+            found_path = _search_path(expanded_path, marker)
             if found_path:
-                found_path = update_or_add_location(
-                    found_path, loc.get("tool", "unknown")
-                )
-                return found_path, loc.get("tool", "unknown")
+                loc["verified"] = True
+                return *found_path, loc.get("tool", "unknown")
 
     # Stage 3: Search in home directory
     logging.info("Stage 3: Searching in home directory.")
     home_dir = Path.home()
-    found_path = search_directory(home_dir, marker)
+    found_path = _search_path(home_dir, marker)
     if found_path:
-        found_path = update_or_add_location(found_path)
-        return found_path, "unknown"
+        _add_location(found_path[1])
+        return *found_path, "unknown"
 
     # Stage 4: Search the rest of the hard drive
     logging.info(
@@ -164,10 +183,10 @@ def find_log_file_with_marker(marker: str) -> Optional[Tuple[Path, str]]:
                 continue
 
             try:
-                found_path = search_directory(root_path, marker)
+                found_path = _search_path(root_path, marker)
                 if found_path:
-                    found_path = update_or_add_location(found_path)
-                    return found_path, "unknown"
+                    _add_location(found_path[1])
+                    return *found_path, "unknown"
             except PermissionError:
                 continue
 

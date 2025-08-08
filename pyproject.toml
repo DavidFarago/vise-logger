@@ -17,5 +17,13 @@ dependencies = [
     "requests",
 ]
 
+[project.optional-dependencies]
+dev = [
+    "pytest",
+    "ruff",
+    "mypy",
+    "types-requests",
+]
+
 [project.scripts]
 vise-logger = "vise_logger.main:main"
